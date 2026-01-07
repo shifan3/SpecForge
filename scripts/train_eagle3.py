@@ -270,6 +270,21 @@ def build_target_model(
                 .eval()
                 .cuda()
             )
+        elif (
+            args.is_vlm
+            and draft_model_config.target_model_type == "qwen3_vl"
+            and args.tp_size == 1
+        ):
+            from transformers import Qwen3VLForConditionalGeneration
+
+            target_model = (
+                Qwen3VLForConditionalGeneration.from_pretrained(
+                    pretrained_model_name_or_path=args.target_model_path,
+                    torch_dtype=torch.bfloat16,
+                )
+                .eval()
+                .cuda()
+            )
         else:
             if args.target_model_backend == "sglang":
                 target_model_kwargs = SGLangBackendArgs.from_args(args).to_kwargs()
@@ -312,7 +327,16 @@ def build_target_model(
             lm_head_key=args.lm_head_key,
             cache_dir=args.model_download_dir,
         )
-        return target_head, None
+        # For VLM offline training, we still need processor for dataset building
+        if args.is_vlm:
+            processor = AutoProcessor.from_pretrained(
+                args.target_model_path,
+                min_pixels=args.min_pixels,
+                max_pixels=args.max_pixels,
+            )
+        else:
+            processor = None
+        return target_head, processor
 
 
 def sanity_check(args: Namespace) -> None:
@@ -428,6 +452,9 @@ def build_dataloaders(
                 args.max_length,
             )
 
+    # For offline training, we don't use VLMDataCollator since pixel_values
+    # are not in the hidden states files (they were already processed)
+    is_offline = args.train_hidden_states_path is not None
     train_dataloader = prepare_dp_dataloaders(
         train_eagle3_dataset,
         args.target_batch_size,
@@ -436,7 +463,7 @@ def build_dataloaders(
         process_group=(
             get_draft_dp_group() if args.attention_backend == "usp" else get_dp_group()
         ),
-        is_vlm=args.is_vlm,
+        is_vlm=args.is_vlm and not is_offline,
     )
 
     if args.eval_data_path is not None or args.eval_hidden_states_path is not None:
@@ -457,6 +484,7 @@ def build_dataloaders(
                 args.eval_hidden_states_path,
                 args.max_length,
             )
+        eval_is_offline = args.eval_hidden_states_path is not None
         eval_dataloader = prepare_dp_dataloaders(
             eval_eagle3_dataset,
             args.target_batch_size,
@@ -467,7 +495,7 @@ def build_dataloaders(
                 if args.attention_backend == "usp"
                 else get_dp_group()
             ),
-            is_vlm=args.is_vlm,
+            is_vlm=args.is_vlm and not eval_is_offline,
         )
         print_with_rank("Initialized eval dataloader")
     else:
@@ -528,7 +556,8 @@ def run_forward(
     target_model: Optional[Eagle3TargetModel] = None,
     is_online: bool = True,
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
-    if args.is_vlm:
+    if args.is_vlm and is_online:
+        # VLM online training: use pixel_values to compute hidden states on-the-fly
         plosses, _, acces = eagle3_model(
             input_ids=data["input_ids"].cuda(),
             attention_mask=data["attention_mask"].cuda(),
@@ -684,7 +713,13 @@ def main():
     # ================================================
     if (
         args.is_vlm
-        and getattr(draft_model_config, "target_model_type", None) == "qwen2_5_vl"
+        and getattr(draft_model_config, "target_model_type", None)
+        in {
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "qwen3_vl_moe",
+        }
+        and is_online  # Only use VLM model for online training
     ):
         eagle3_model = QwenVLOnlineEagle3Model(
             target_model=target_model,
@@ -692,8 +727,11 @@ def main():
             processor=processor,
             length=args.ttt_length,
             attention_backend=args.attention_backend,
+            target_model_type=getattr(draft_model_config, "target_model_type", None),
         )
     else:
+        # For offline training (including VLM), use OnlineEagle3Model
+        # which accepts pre-computed hidden_states and target
         eagle3_model = OnlineEagle3Model(
             draft_model=draft_model,
             length=args.ttt_length,

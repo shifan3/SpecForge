@@ -16,7 +16,14 @@ class TargetHead(nn.Module):
     def __init__(self, model_path):
         super().__init__()
         self.config = AutoConfig.from_pretrained(model_path)
-        self.fc = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
+        # For VLM models like Qwen3VL, hidden_size/vocab_size are in text_config
+        if hasattr(self.config, "text_config"):
+            hidden_size = self.config.text_config.hidden_size
+            vocab_size = self.config.text_config.vocab_size
+        else:
+            hidden_size = self.config.hidden_size
+            vocab_size = self.config.vocab_size
+        self.fc = nn.Linear(hidden_size, vocab_size, bias=False)
 
     @classmethod
     def from_pretrained(
@@ -25,12 +32,31 @@ class TargetHead(nn.Module):
         lm_head_key: str = "lm_head.weight",
         cache_dir: Optional[str] = None,
     ) -> "TargetHead":
+        import torch.distributed as dist
+
         target_head = cls(model_path)
-        target_head.load_weights(
-            model_path=model_path,
-            lm_head_key=lm_head_key,
-            cache_dir=cache_dir,
-        )
+
+        # Serialize weight loading to avoid safetensors race condition
+        # when multiple processes read the same file simultaneously
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+            # Load weights one rank at a time to avoid file read race condition
+            for i in range(world_size):
+                if rank == i:
+                    target_head.load_weights(
+                        model_path=model_path,
+                        lm_head_key=lm_head_key,
+                        cache_dir=cache_dir,
+                    )
+                dist.barrier()
+        else:
+            target_head.load_weights(
+                model_path=model_path,
+                lm_head_key=lm_head_key,
+                cache_dir=cache_dir,
+            )
+
         target_head.freeze_weights()
         target_head = target_head.eval().cuda().to(torch.bfloat16)
         return target_head
@@ -72,6 +98,7 @@ class TargetHead(nn.Module):
         else:
             state_dict = torch.load(os.path.join(self.model_path, ckpt_file))
             lm_head = state_dict[lm_head_key]
+
         self.fc.weight.copy_(lm_head)
 
     def freeze_weights(self):

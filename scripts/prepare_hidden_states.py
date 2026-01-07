@@ -144,39 +144,32 @@ def build_target_model(
     """
     Build the target model according to the arguments.
 
-    For VLM models (Qwen2.5-VL) without TP, load directly from transformers.
-    Otherwise, use the Eagle3 target model wrapper.
+    Use the Eagle3 target model wrapper with sglang backend.
     """
-    if args.is_vlm and model_config.model_type == "qwen2_5_vl" and args.tp_size == 1:
-        # TODO: replace with sglang
-        from transformers import Qwen2_5_VLForConditionalGeneration
-
-        target_model = (
-            Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                pretrained_model_name_or_path=args.target_model_path,
-                torch_dtype=(
-                    model_config.dtype
-                    if hasattr(model_config, "dtype")
-                    else model_config.torch_dtype
-                ),
-            )
-            .eval()
-            .cuda()
-        )
-    else:
-        target_model_kwargs = SGLangBackendArgs.from_args(args).to_kwargs()
-        target_model = get_eagle3_target_model(
-            pretrained_model_name_or_path=args.target_model_path,
-            backend="sglang",  # we set this as the default backend to minimize precision mismatch in training and serving
-            torch_dtype=(
-                model_config.dtype
-                if hasattr(model_config, "dtype")
-                else model_config.torch_dtype
-            ),
-            device="cuda",
-            cache_dir=args.model_download_dir,
-            **target_model_kwargs,
-        )
+    target_model_kwargs = SGLangBackendArgs.from_args(args).to_kwargs()
+    # Get dtype from config, checking multiple possible locations (VLM models may have it nested)
+    torch_dtype = None
+    if hasattr(model_config, "dtype") and model_config.dtype is not None:
+        torch_dtype = model_config.dtype
+    elif hasattr(model_config, "torch_dtype") and model_config.torch_dtype is not None:
+        torch_dtype = model_config.torch_dtype
+    elif hasattr(model_config, "text_config"):
+        text_config = model_config.text_config
+        if hasattr(text_config, "dtype") and text_config.dtype is not None:
+            torch_dtype = text_config.dtype
+        elif hasattr(text_config, "torch_dtype") and text_config.torch_dtype is not None:
+            torch_dtype = text_config.torch_dtype
+    # Default to bfloat16 if no dtype found
+    if torch_dtype is None:
+        torch_dtype = "bfloat16"
+    target_model = get_eagle3_target_model(
+        pretrained_model_name_or_path=args.target_model_path,
+        backend="sglang",  # we set this as the default backend to minimize precision mismatch in training and serving
+        torch_dtype=torch_dtype,
+        device="cuda",
+        cache_dir=args.model_download_dir,
+        **target_model_kwargs,
+    )
     # Set auxiliary hidden states layers if specified
     target_model.set_aux_hidden_states_layers(args.aux_hidden_states_layers)
 

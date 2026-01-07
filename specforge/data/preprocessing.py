@@ -400,12 +400,14 @@ def build_eagle3_dataset(
         batch_size = (
             200  # reduce batch size for VLM datasets to avoid PyArrow offset overflow
         )
+        actual_num_proc = None
     else:
         batch_size = 1000  # default for conversations
+        actual_num_proc = num_proc
     dataset = dataset.map(
         preprocess_function,
         batched=True,
-        num_proc=num_proc,
+        num_proc=actual_num_proc,
         batch_size=batch_size,
         remove_columns=original_cols,
         # keep_in_memory=True,
