@@ -7,6 +7,10 @@ to the format expected by SpecForge's VLM preprocessing:
 - Top-level 'image' field (single image path)
 - 'conversations' field with simple string content
 
+Supports multiple input formats:
+- Format 1: 'conversations' field with [{role, content}, ...]
+- Format 2: 'messages' field with [{role, content}, ...] (e.g., full_page_reader dataset)
+
 Usage:
     python convert_vlm_dataset.py --input /path/to/dataset.json --output /path/to/output.jsonl
 """
@@ -47,7 +51,7 @@ def convert_dataset(input_path: str, output_path: str, keep_multi_image: bool = 
     skipped_multi_image = 0
     skipped_no_image = 0
     kept_first_image = 0
-
+    skipped_too_long = 0
     for entry in data:
         images = entry.get('images', [])
 
@@ -69,8 +73,11 @@ def convert_dataset(input_path: str, output_path: str, keep_multi_image: bool = 
 
         # Convert conversations to simple format
         # SpecForge expects: conversations = [{role, content(string)}, ...]
+        # Support both 'conversations' and 'messages' fields
+        source_messages = entry.get('conversations') or entry.get('messages', [])
         new_conversations = []
-        for msg in entry.get('conversations', []):
+        brk = False
+        for msg in source_messages:
             role = msg['role']
             content = msg['content']
 
@@ -80,12 +87,18 @@ def convert_dataset(input_path: str, output_path: str, keep_multi_image: bool = 
                 content_str = ''.join(text_parts)
             else:
                 content_str = content
-
+            content_str = content_str.replace('<image>', '')
+            if len(content_str) >= 1024 and False:
+                print(f"Skipped (too long): {len(content_str)}")
+                skipped_too_long += 1
+                brk = True
+                break
             new_conversations.append({
                 'role': role,
                 'content': content_str
             })
-
+        if brk:
+            continue
         converted.append({
             'image': image_path,
             'conversations': new_conversations
@@ -96,6 +109,7 @@ def convert_dataset(input_path: str, output_path: str, keep_multi_image: bool = 
 
     print(f"Skipped (multi-image): {skipped_multi_image}")
     print(f"Skipped (no image): {skipped_no_image}")
+    print(f"Skipped (too long): {skipped_too_long}")
     if keep_multi_image:
         print(f"Kept first image only: {kept_first_image}")
     print(f"Converted entries: {len(converted)}")

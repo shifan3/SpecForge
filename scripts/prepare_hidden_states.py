@@ -94,7 +94,7 @@ def parse_args():
 
     inference_group = parser.add_argument_group("inference")
     inference_group.add_argument("--tp-size", type=int, default=1)
-    inference_group.add_argument("--batch-size", type=int, default=32)
+    inference_group.add_argument("--batch-size", type=int, default=1)
 
     others_group = parser.add_argument_group("others")
     others_group.add_argument("--cache-dir", type=str, default="./cache")

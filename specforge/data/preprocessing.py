@@ -397,12 +397,14 @@ def build_eagle3_dataset(
 
     # adjust batch size based on dataset type
     if is_vlm:
-        batch_size = (
-            200  # reduce batch size for VLM datasets to avoid PyArrow offset overflow
-        )
+        # VLM datasets have large pixel_values arrays that can cause PyArrow offset overflow
+        # Use very small batch_size and writer_batch_size to avoid the 2GB offset limit
+        batch_size = 10
+        writer_batch_size = 10
         actual_num_proc = None
     else:
         batch_size = 1000  # default for conversations
+        writer_batch_size = 1000
         actual_num_proc = num_proc
     dataset = dataset.map(
         preprocess_function,
@@ -410,7 +412,7 @@ def build_eagle3_dataset(
         num_proc=actual_num_proc,
         batch_size=batch_size,
         remove_columns=original_cols,
-        # keep_in_memory=True,
+        writer_batch_size=writer_batch_size,
         load_from_cache_file=load_from_cache_file,
         cache_file_name=cache_file_name,
     )

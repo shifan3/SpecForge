@@ -15,12 +15,12 @@ RAW_DATASET=/mnt/data5/datasets/真题卷image2html/dataset.json
 CONVERTED_DATASET=/mnt/data5/datasets/真题卷image2html/dataset_draft_specforge.jsonl
 CACHE_DIR=cache/$PROJECT_NAME
 HIDDEN_STATES_PATH=$CACHE_DIR/hidden_states/
-CONFIG_FILE=$ROOT_DIR/configs/qwen3-vl-8b-eagle3.json
+CONFIG_FILE=$ROOT_DIR/configs/qwen3-vl-32b-eagle3.json
 
 # Convert dataset to SpecForge format (skip if already exists)
 if [ ! -f "$CONVERTED_DATASET" ]; then
     echo "Converting dataset to SpecForge format..."
-    python3.11 $SCRIPT_DIR/convert_vlm_dataset.py \
+    python3.11 $ROOT_DIR/scripts/convert_vlm_dataset.py \
         --input "$RAW_DATASET" \
         --output "$CONVERTED_DATASET" \
         --max-entries 100
@@ -34,9 +34,9 @@ else
 fi
 
 # Step 1: Generate hidden states (skip if already exists)
-if [ ! -d "$HIDDEN_STATES_PATH" ] || [ -z "$(ls -A $HIDDEN_STATES_PATH 2>/dev/null)" ]; then
+#if [ ! -d "$HIDDEN_STATES_PATH" ] || [ -z "$(ls -A $HIDDEN_STATES_PATH 2>/dev/null)" ]; then
     echo "Generating hidden states..."
-    torchrun \
+    TOKENIZERS_PARALLELISM=false torchrun \
         --standalone \
         --nproc_per_node $NUM_GPUS \
         $ROOT_DIR/scripts/prepare_hidden_states.py \
@@ -55,10 +55,12 @@ if [ ! -d "$HIDDEN_STATES_PATH" ] || [ -z "$(ls -A $HIDDEN_STATES_PATH 2>/dev/nu
         echo "Error: Hidden states generation failed!"
         exit 1
     fi
-else
-    echo "Using existing hidden states: $HIDDEN_STATES_PATH"
-fi
-
+#else
+    #echo "Using existing hidden states: $HIDDEN_STATES_PATH"
+#fi
+exit 0
+OUTPUT_DIR=$ROOT_DIR/outputs/$PROJECT_NAME-eagle3-offline
+rm -rf $OUTPUT_DIR
 # Step 2: Train eagle3 offline
 echo "Starting offline training..."
 torchrun \
@@ -70,10 +72,10 @@ torchrun \
     --train-data-path "$CONVERTED_DATASET" \
     --train-hidden-states-path "$HIDDEN_STATES_PATH" \
     --build-dataset-num-proc $BUILD_DATASET_NUM_PROC \
-    --output-dir $ROOT_DIR/outputs/$PROJECT_NAME-eagle3-offline \
+    --output-dir $OUTPUT_DIR \
     --num-epochs 10 \
     --batch-size 1 \
-    --learning-rate 1e-4 \
+    --learning-rate 3e-5 \
     --max-length 8192 \
     --dist-timeout 360 \
     --chat-template qwen3-vl \
@@ -82,4 +84,6 @@ torchrun \
     --tp-size $TP_SIZE \
     --is-vlm \
     --min-pixels 50176 \
-    --max-pixels 1048576
+    --max-pixels 1048576 \
+    --eval-interval 500 \
+    --save-interval 500 \
