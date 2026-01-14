@@ -9,10 +9,10 @@ TP_SIZE=${2:-1}
 BUILD_DATASET_NUM_PROC=${BUILD_DATASET_NUM_PROC:-64}
 
 # Dataset paths
-PROJECT_NAME=kuaiduya
-TARGET_MODEL_PATH=/mnt/ceph2/kuaiduya-engine/models/full_page_reader_v4/QUANT/AWQ/W4A16/
-RAW_DATASET=/mnt/ceph2/kuaiduya-engine/data/full_page_reader/trainset.v4.json 
-CONVERTED_DATASET=/mnt/ceph2/kuaiduya-engine/data/full_page_reader/trainset.v4.draft_specforge.jsonl
+PROJECT_NAME=image2html
+TARGET_MODEL_PATH=/mnt/data5/school_tiku/models/image2html_large_3/QUANT/AWQ/W4A16
+RAW_DATASET=/mnt/data5/datasets/真题卷image2html/dataset.json
+CONVERTED_DATASET=/mnt/data5/datasets/真题卷image2html/dataset_draft_specforge.jsonl
 CACHE_DIR=cache/$PROJECT_NAME
 HIDDEN_STATES_PATH=$CACHE_DIR/hidden_states/
 CONFIG_FILE=$ROOT_DIR/configs/qwen3-vl-32b-eagle3.json
@@ -44,10 +44,11 @@ if [ ! -d "$HIDDEN_STATES_PATH" ] || [ -z "$(ls -A $HIDDEN_STATES_PATH 2>/dev/nu
         --data-path "$CONVERTED_DATASET" \
         --output-path "$HIDDEN_STATES_PATH" \
         --chat-template qwen3-vl \
-        --max-length 10240 \
+        --max-length 8192 \
         --batch-size 1 \
         --is-vlm \
-        --enable-aux-hidden-states 
+        --enable-aux-hidden-states \
+        #--sglang-mem-fraction-static 0.85
 
     if [ $? -ne 0 ]; then
         echo "Error: Hidden states generation failed!"
@@ -56,6 +57,9 @@ if [ ! -d "$HIDDEN_STATES_PATH" ] || [ -z "$(ls -A $HIDDEN_STATES_PATH 2>/dev/nu
 else
     echo "Using existing hidden states: $HIDDEN_STATES_PATH"
 fi
+
+# 显存不够的话，上面这一步可以在其他机器上生成，不需要安装sglang
+
 OUTPUT_DIR=$ROOT_DIR/outputs/$PROJECT_NAME-eagle3-offline
 rm -rf $OUTPUT_DIR
 # Step 2: Train eagle3 offline
@@ -82,5 +86,5 @@ torchrun \
     --is-vlm \
     --min-pixels 50176 \
     --max-pixels 1048576 \
-    --eval-interval 100 \
-    --save-interval 100 \
+    --eval-interval 500 \
+    --save-interval 500 \
